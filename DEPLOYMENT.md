@@ -20,7 +20,7 @@ git commit -m "Initial commit: AI Text Humanizer"
 
 ### 1.2 Create GitHub Repository
 
-1. Go to [GitHub](https://github.com) and sign in
+1. Go to [GitHub](https://github.com/YOUR_USERNAME/ai-text-humanizer) and sign in
 2. Click the "+" icon in the top right corner
 3. Select "New repository"
 4. Name it `ai-text-humanizer`
