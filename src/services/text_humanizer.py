@@ -7,7 +7,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import requests
 from rich.console import Console
@@ -42,8 +42,127 @@ class TextHumanizer(BaseAPI):
         """Validate API response."""
         return response.status_code == 200
     
+    def check_credits(self) -> Optional[Dict[str, Any]]:
+        """
+        Check user credit balance.
+        
+        Returns:
+            Dictionary containing credit information or None if failed
+        """
+        try:
+            response = self._make_request("GET", f"{self.base_url}/check-user-credits")
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            handle_api_error(e.response.status_code)
+            return None
+        except Exception as e:
+            console.print(f"❌ Failed to check credits: {str(e)}", style="red")
+            return None
+    
+    def list_documents(self, offset: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        List user documents.
+        
+        Args:
+            offset: Optional offset for pagination
+            
+        Returns:
+            Dictionary containing documents list or None if failed
+        """
+        try:
+            payload = {}
+            if offset is not None:
+                payload["offset"] = offset
+            
+            response = self._make_request("POST", f"{self.base_url}/list", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            handle_api_error(e.response.status_code)
+            return None
+        except Exception as e:
+            console.print(f"❌ Failed to list documents: {str(e)}", style="red")
+            return None
+    
+    def rehumanize_document(self, document_id: str, readability: str = "University", 
+                           purpose: str = "General Writing", strength: str = "More Human",
+                           model: str = "v11") -> Optional[Dict[str, Any]]:
+        """
+        Rehumanize an existing document with new settings.
+        
+        Args:
+            document_id: The ID of the document to rehumanize
+            readability: The new readability level
+            purpose: The new purpose
+            strength: The new humanization strength
+            model: The AI model to use
+            
+        Returns:
+            Dictionary containing the rehumanized text or None if failed
+        """
+        try:
+            # First, get the original document to extract the input text
+            original_doc = self._get_document(document_id)
+            if not original_doc:
+                console.print("❌ Failed to retrieve original document", style="red")
+                return None
+            
+            input_text = original_doc.get("input", "")
+            if not input_text:
+                console.print("❌ No input text found in original document", style="red")
+                return None
+            
+            console.print("🔄 Rehumanizing document with new settings...", style="blue")
+            
+            # Submit the original text for rehumanization with new settings
+            task_id = self._submit_text(input_text, readability, purpose, strength, model)
+            if not task_id:
+                return None
+            
+            # Poll for results
+            console.print("⏳ Processing rehumanization...", style="blue")
+            result = self._poll_for_results(task_id)
+            
+            if result and result.get("output"):
+                console.print("✅ Document rehumanized successfully!", style="green")
+                # Add metadata about rehumanization
+                result["rehumanized_from"] = document_id
+                result["original_settings"] = {
+                    "readability": original_doc.get("readability"),
+                    "purpose": original_doc.get("purpose"),
+                    "strength": original_doc.get("strength"),
+                    "model": original_doc.get("model")
+                }
+                self._save_result_to_history(result)
+                return result
+            else:
+                console.print("❌ Rehumanization failed", style="red")
+                return None
+                
+        except requests.exceptions.HTTPError as e:
+            handle_api_error(e.response.status_code)
+            return None
+        except Exception as e:
+            console.print(f"❌ Failed to rehumanize document: {str(e)}", style="red")
+            return None
+    
+    def _get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific document by ID."""
+        try:
+            response = self._make_request("POST", f"{self.base_url}/document", json={"id": document_id})
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            handle_api_error(e.response.status_code)
+            return None
+        except Exception as e:
+            console.print(f"❌ Failed to get document: {str(e)}", style="red")
+            return None
+    
     def humanize_text(self, text: str, readability: str = "University", 
-                     purpose: str = "General Writing", strength: str = "More Human") -> Optional[Dict[str, Any]]:
+                     purpose: str = "General Writing", strength: str = "More Human",
+                     model: str = "v11") -> Optional[Dict[str, Any]]:
         """
         Humanize AI-generated text.
         
@@ -52,6 +171,7 @@ class TextHumanizer(BaseAPI):
             readability: The readability level
             purpose: The purpose of the text
             strength: The humanization strength
+            model: The AI model to use (v2 or v11)
             
         Returns:
             Dictionary containing the humanized text and metadata, or None if failed
@@ -62,7 +182,7 @@ class TextHumanizer(BaseAPI):
         console.print("🚀 Submitting text for humanization...", style="blue")
         
         # Submit text for humanization
-        task_id = self._submit_text(text, readability, purpose, strength)
+        task_id = self._submit_text(text, readability, purpose, strength, model)
         if not task_id:
             return None
         
@@ -88,7 +208,7 @@ class TextHumanizer(BaseAPI):
             return False
         return True
     
-    def _submit_text(self, text: str, readability: str, purpose: str, strength: str) -> Optional[str]:
+    def _submit_text(self, text: str, readability: str, purpose: str, strength: str, model: str = "v11") -> Optional[str]:
         """Submit text for humanization and get task ID."""
         try:
             payload = {
@@ -96,7 +216,7 @@ class TextHumanizer(BaseAPI):
                 "readability": readability,
                 "purpose": purpose,
                 "strength": strength,
-                "model": "v11",
+                "model": model,
             }
             
             response = self._make_request("POST", f"{self.base_url}/submit", json=payload)
@@ -164,6 +284,7 @@ class TextHumanizer(BaseAPI):
         console.print(f"📊 Character count: {len(output_text)}", style="green")
         console.print(f"🎯 Readability: {result.get('readability', 'N/A')}", style="blue")
         console.print(f"🎯 Purpose: {result.get('purpose', 'N/A')}", style="blue")
+        console.print(f"🤖 Model: {result.get('model', 'N/A')}", style="blue")
         console.print("=" * 80, style="cyan")
     
     def save_to_file(self, text: str) -> None:
@@ -198,9 +319,8 @@ class TextHumanizer(BaseAPI):
                 settings = f"{entry.get('readability', 'N/A')}\n{entry.get('purpose', 'N/A')}"
                 console.print(f"{date_str} | {input_preview} | {output_preview} | {settings}")
             
-            console.print(f"\nShowing last 10 entries (Total: {len(history)})")
+            input("Press Enter to continue...")
             
         except Exception as e:
             console.print(f"❌ Error reading history: {str(e)}", style="red")
-        
-        input("\nPress Enter to continue...") 
+            input("Press Enter to continue...") 
